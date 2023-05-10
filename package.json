@@ -1,0 +1,24 @@
+{
+  "name": "sockettest",
+  "version": "1.0.0",
+  "description": "Implementing tic-tac between two clients using socket",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint . --ext .js",
+    "lint:fix": "eslint . --ext .js --fix"
+  },
+  "type" : "module",  
+  "author": "Kartik Hira",
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^8.40.0",
+    "eslint-config-google": "^0.14.0"
+  },
+  "dependencies": {
+    "http": "^0.0.1-security",
+    "readcommand": "^0.4.0",
+    "socket.io": "^4.6.1",
+    "socket.io-client": "^4.6.1"
+  }
+}
