@@ -1,107 +1,152 @@
 import { io } from 'socket.io-client';
-import readCommand from 'readcommand';
+import readline from 'readline';
 
 const link = process.argv[2];
 const port = process.argv[3];
-let pos; // first or second position indicator
-let altPos;
-let ID;
 let socket;
+let pos, altPos, ID, shouldHandleInput = false;
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  prompt: '' // Empty prompt string
+});
 
 /**
- * Validate link and port, then create a Socket.IO connection
+ * Set up socket connection using the link and port provided as command line arguments.
  */
-if (!link || !port) {
-  console.log('Please Enter the weblink and port');
-} else {
-  const address = `http://${link}:${port}`;
-  socket = io(address); // concatenate link and port to make the socket
+function setupSocket() {
+  if (!link || !port) {
+    console.log('Please Enter the weblink and port');
+    process.exit(1);
+  } else {
+    const address = `http://${link}:${port}`;
+    socket = io(address); // concatenate link and port to make the socket
+    
+    socket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error.message);
+      process.exit(1);
+    });
+
+    socket.on('connect_timeout', () => {
+      console.error('Socket connection timeout');
+      process.exit(1);
+    });
+  }
 }
 
 /**
- * Establish a connection with the server
+ * Handle SIGINT event (Ctrl+C) to disconnect socket and exit the process.
  */
-socket.on('connect', async () => {
-  console.log(`connected to ${link} ${port}`);
-  ID = socket.id;
+function handleSigint() {
+  process.on('SIGINT', () => {
+    socket.disconnect();
+    process.exit(0);
+  });
+}
 
-  /**
-   * Set up the game, determine if the current player is the first or second player
-   */
-  socket.on('Game started. You are the [first | second] player.', (id) => {
-    if (id == ID) {
-      pos = 'first';
-      altPos = 'second';
-      readCommand.read((err, args) => {
-        socket.emit('play', args[0]);
-      });
-    } else {
-      pos = 'second';
-      altPos = 'first';
+
+/**
+ * Handle readline events for user input and SIGINT.
+ */
+function handleReadline() {
+  rl.setMaxListeners(20);
+
+  rl.on('line', (input) => {
+    if (input == 'r') {
+      handleResign();
+    } else if (shouldHandleInput) {
+      socket.emit('play', input);
     }
-    console.log(`You are ${pos} player`);
   });
 
-  /**
-   * Display the current board and request input if it's the current player's turn
-   */
+  rl.on('SIGINT', () => {
+    socket.disconnect();
+    rl.close(); // Close readline interface
+    process.exit(0);
+  });
+}
+
+/**
+ * Send resignation message to the server.
+ */
+function handleResign() {
+  socket.emit('r');
+}
+
+/**
+ * Read user input and determine if it should be handled.
+ * @param {string} id - The socket ID of the current player
+ */
+function readInput(id) {
+  shouldHandleInput = (id == ID);
+}
+
+/**
+ * Handle socket events for connection, game start, current board, game over, invalid move, player disconnect, and server full.
+ */
+function handleSocketEvents() {
+  socket.on('connect', async () => {
+    console.log(`connected to ${link} ${port}`);
+    ID = socket.id;
+    socket.emit('join');
+  });
+
+  socket.on('gameStart', (msg,currBoard, id) => {
+    readInput(id);
+    pos = (id == ID) ? 'first' : 'second';
+    altPos = (id == ID) ? 'second' : 'first';
+  });
+
   socket.on('currentBoard', (currBoard, id) => {
-    readCommand.read((err, args) => {
-      if (err && err.code === 'SIGINT') {
-        socket.disconnect();
-        process.exit();
-      }
-      else if (args[0]== 'r'){
-        handleResign();
-      }
-      else {
-        if(id == ID){
-          socket.emit('play', args[0]);
-        }
-      }
-    });
+    console.log(currBoard);
+    readInput(id);
   });
 
-  /**
-   * Handle the game over event and display the appropriate message
-   * @param {string} id - The socket ID of the winning player
-   * @param {string} reason - The reason the game ended ('TIE', 'FAIR', 'RESIGN', or 'DISCONNECT')
-   */
   socket.on('gameOver', (id, reason) => {
-    if (reason == 'TIE') {
-      console.log('Game is tied.');
-    }
-    if (reason == 'FAIR') {
-      if (ID == id) {
-        console.log(`Game won by ${pos} player.`);
-      } else console.log(`Game won by ${altPos} player.`);
-    }
-    if (reason == 'RESIGN') {
-      if (ID == id) {
-        console.log(`Game won by ${pos} player due to resignation.`);
-      } else console.log(`Game won by ${altPos} player due to resignation.`);
-    }
-    if (reason == 'DISCONNECT') {
-      if (ID == id) {
-        console.log(`Game won by ${pos} player since ${altPos} player disconnected.`);
-      } else console.log(`Game won by ${altPos} player since ${pos} player disconnected.`);
+    let winner = (ID == id) ? pos : altPos;
+    switch(reason) {
+      case 'TIE':
+        console.log('Game is tied.');
+        break;
+      case 'FAIR':
+        console.log(`Game won by ${winner} player.`);
+        break;
+      case 'RESIGN':
+        console.log(`Game won by ${winner} player due to resignation.`);
+        break;
+      case 'DISCONNECT':
+        console.log(`Game won by ${winner} player since ${altPos} player disconnected.`);
+        break;
+      case 'EARLY_OUT':
+        console.log('You resigned/disconnected before other player joined');
+        break;
     }
   });
 
-  socket.on('EARLY_OUT', ()=>{
-    console.log('You resigned/disconnected before other player joined');
-  })
-
-  socket.on('InvalidMove', ()=>{
-    console.log('Move was Invalid, Please try again');
+  socket.on('InvalidMove', () => {
+    //console.log('Move was Invalid, Please try again');
   });
 
   socket.on('playerDisconnect', () => {
-    console.log('You are disconnected from server!');
+    socket.disconnect();
+    process.exit(0);
   });
 
-  const handleResign = () => {
-    socket.emit('r');
-  };
-  
-});
+  socket.on('serverFull', () => {
+    socket.disconnect();
+    process.exit(0);
+  });
+}
+
+/**
+ * Main function to set up socket, handle SIGINT, handle readline, and handle socket events.
+ */
+function main() {
+  setupSocket();
+  handleSigint();
+  handleReadline();
+  handleSocketEvents();
+}
+
+main();

@@ -1,11 +1,5 @@
-import {
-  game,
-  gameStatus,
-  placeSymbol,
-  switchPlayer,
-  presentCurrentBoard,
-  flushVars,
-} from './game.js';
+import { Game } from './game.js';
+const game = new Game();
 
 /**
  * Creates and returns socket event handlers.
@@ -18,19 +12,23 @@ export default function createSocketEventHandlers(io) {
    * @param {object} socket - The connected socket instance.
    */
   const onConnect = (socket) =>{
+
+    if(io.engine.clientsCount > 2) {
+      socket.emit('serverFull');
+      return;
+    }
     game.players.push({
       id: socket.id
     });
     if (game.players.length == 2) {
-      io.emit('Game started. You are the [first | second] player.', game.players[0].id);
-      /**
+
         // Push different messages to both sockets
         const player1Socket = io.to(game.players[0].id);
         const player2Socket = io.to(game.players[1].id);
-
-        player1Socket.emit('Game started. You are the first player.');
-        player2Socket.emit('Game started. You are the second player.');
-        */
+        game.activePlayer = game.players[0];
+        player1Socket.emit('gameStart','Game started. You are the first player.', game.presentCurrentBoard(),  game.players[0].id);
+        player2Socket.emit('gameStart','Game started. You are the second player.', game.presentCurrentBoard(),  game.players[0].id);
+        
     }
   };
   /**
@@ -40,7 +38,7 @@ export default function createSocketEventHandlers(io) {
    * @return {boolean} - Whether the move is valid or not.
    */
   const moveValid = (socket, pos) =>{
-    if(!game.activePlayer) return true;
+    if(!game.activePlayer) return false;
     if ((game.activePlayer.id != socket.id) ||
       !(pos > 0 && pos < 10) ||
       game.endGame ||
@@ -59,32 +57,29 @@ export default function createSocketEventHandlers(io) {
    */
   const playHandler = (socket, move) =>{
     if(game.players.length == 0) return;
-    if (!game.activePlayer) game.activePlayer = game.players[0];
     const pos = parseInt(move, 10);
 
     if (!moveValid(socket, pos)) {
       socket.emit('InvalidMove');
-      io.emit('currentBoard', presentCurrentBoard(), game.activePlayer.id);
+      socket.emit('currentBoard', game.presentCurrentBoard(), game.activePlayer.id);
       return;
     }
 
-    game.currentBoard[pos-1] = placeSymbol();
-    gameStatus(); // Check the game status
+    game.currentBoard[pos-1] = game.placeSymbol();
+    game.gameStatus(); 
 
-    if (!game.endGame) { // Game is not over, send Both clients board
-      const currBoard = presentCurrentBoard();
-      switchPlayer();
+    if (!game.endGame) { 
+      const currBoard = game.presentCurrentBoard();
+      game.switchPlayer();
       io.emit('currentBoard', currBoard, game.activePlayer.id);
-    } else { // Game is over, send event gameOver with winner and reason
+    } else { 
       if (!game.winner) {
-        io.emit('gameOver', game.winner, 'TIE');
-        io.emit('playerDisconnect');
+        gameOver(null, 'TIE');
       }
       else {
-        io.emit('gameOver', game.winner.id, 'FAIR');
-        io.emit('playerDisconnect');
+        gameOver(game.winner.id, 'FAIR');
       }
-      flushVars();
+      game.flushVars();
     }
   };
 
@@ -92,61 +87,58 @@ export default function createSocketEventHandlers(io) {
    * Handles user Resignation.
    */
   const resignHandler = (socket) =>{
-    // If player1 resigns, Winner is player 2 and vice versa
-    if(!game.players[1]){// meaning player 1 resigned before player 2 joined
-      io.emit('gameOver', null, 'EARLY_OUT');
-      socket.emit('playerDisconnect');
-      flushVars();
+
+    // Player 1 resigns before player 2 joined
+    if(!game.players[1]){
+      gameOver(null, 'EARLY_OUT');
+      game.flushVars();
       return;
     }
     if (socket.id === game.players[0].id) {
-      io.emit('gameOver', game.players[1].id, 'RESIGN');
-      io.emit('playerDisconnect');
+      gameOver(game.players[1].id, 'RESIGN');
     } else {
-      io.emit('gameOver', game.players[0].id, 'RESIGN');
-      io.emit('playerDisconnect');
+      gameOver(game.players[0].id, 'RESIGN');
     }
 
-    flushVars();
+    game.flushVars();
   };
 
   /**
    * Handles user disconnection.
    */
   const disconnectHandler = (socket) =>{
-    // If someone disconnects after the game has ended, Just flush and return
-    // If another player disconnects , vars would be already flushed. just return
-    if(game.players.length == 0) return;
+
+    //Error Handling for erronerous setup of game.
     if (game.endGame) {
-      flushVars();
+      game.flushVars();
       return;
     }
-    try{
-      if(!game.players[1]){// meaning player 1 resigned before player 2 joined
-        io.emit('gameOver', null, 'EARLY_OUT');
-        io.emit('playerDisconnect');
-        flushVars();
-        return;
-      }
-    }catch(e){
-      console.log(e)
+    // If player disconnects before other joined
+    if(!game.players[0] || !game.players[1]){ 
+      gameOver(null, 'EARLY_OUT');
+      game.flushVars();
+      return;
     }
-    // If player1 resigns, Winner is player 2 and vice versa
-    try{
+
+    // if Player one Disconnected, player 2 is winner and viceversa
     if (socket.id === game.players[0].id) {
-      if(game.players[1]) {
-        io.emit('gameOver', game.players[1].id, 'DISCONNECT');
-        io.emit('playerDisconnect');
-      }
-    } else if(game.players[0]){
-      io.emit('gameOver', game.players[0].id, 'DISCONNECT');
-      io.emit('playerDisconnect');
+        gameOver(game.players[1].id, 'DISCONNECT');
+    }else {
+      gameOver(game.players[0].id, 'DISCONNECT');
     }
-    flushVars();
-  } catch(e){
-    console.log(e)
-  }
+    game.flushVars();
+    
   };
+
+    /**
+   * Handles the end of a game, emits the 'gameOver' event.
+   * @param {string} id - The id of the winner.
+   * @param {string} reason - The reason for ending the game.
+   */
+  const gameOver = (id, reason) =>{
+    io.emit('gameOver', id, reason);
+    io.emit('playerDisconnect');
+  }
 
   return {
     onConnect,

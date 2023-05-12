@@ -27,7 +27,11 @@ const {
   disconnectHandler,
 } = createSocketEventHandlers(io);
 
-const PORT = process.argv[2] || 5050; // Use the third command line argument as the PORT or default to 5050
+const PORT = process.argv[2]; // Use the third command line argument as the PORT or default to 5050
+
+if (!PORT) {
+  throw new Error('Please provide the PORT number as a command line argument');
+}
 
 /**
  * Start the server and listen on the specified port
